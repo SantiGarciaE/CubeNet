@@ -1,0 +1,117 @@
+/*
+* Este es un ejemplo hecho por Santi que tratara de combinar 3 codigos de ejemplos:
+*    - BLE_potenciometer.
+*    - AnalogInOutSerial.
+*    - BLE_server.
+* 
+* La idea es que el NodeMCU_1 pueda darse a conocer (para que alguien se conecte) y notificar 
+* un valor, dado por el potenciometro (y que ademas se reflejara en su propio led interno).
+* 
+*/
+
+// Dependencias de BLE.
+#include <BLEDevice.h>
+#include <BLEServer.h>
+#include <BLEUtils.h>
+#include <BLE2902.h>
+
+// Dependencias para el potenciometro.
+#include <Arduino.h>
+#include <analogWrite.h>
+
+
+#define potPin A0 // Analog input pin that the potentiometer is attached to.
+
+int sensorRead = 0; // Value read from the potenciometer.
+uint8_t outputValue = 0;  // The set value function only accepts unsigned 8 bit integers.
+
+// Defino las diferentes UUID:
+/* Define the UUID for my custom Service. */
+#define SERVICE_UUID        "4fafc201-1fb5-459e-8fcc-c5c9c331914b" // o BLEUUID((uint16_t)0x1700)
+/* Define the UUID fur my custom Characteristic. */
+#define CHARACTERISTIC_UUID "beb5483e-36e1-4688-b7f5-ea07361b26a8" // o BLEUUID((uint16_t)0x1A00)
+/* Define the UUID fur my custom Descriptor. */
+#define DESCRIPTOR_UUID BLEUUID((uint16_t)0x2901) // o podria poner un numero largo.
+
+/* Define our custom characteristic along with it's properties */
+BLECharacteristic customCharacteristic(
+  CHARACTERISTIC_UUID,
+    BLECharacteristic::PROPERTY_READ |
+    BLECharacteristic::PROPERTY_NOTIFY
+);
+
+/* This function handles the server callbacks */
+bool deviceConnected = false;
+class ServerCallbacks: public BLEServerCallbacks {
+    void onConnect(BLEServer* MyServer) {
+          deviceConnected = true;
+    };
+    
+    void onDisconnect(BLEServer* MyServer) {
+          deviceConnected = false;
+    }
+};
+
+void setup() {
+  Serial.begin(115200);
+  Serial.println("Starting BLE work!");
+    
+  // Create and name the BLE Device
+  BLEDevice::init("MyESP32_Net");
+  
+  /* Create the BLE Server */
+  BLEServer *MyServer = BLEDevice::createServer();
+  MyServer->setCallbacks(new ServerCallbacks());  // Set the function that handles Server Callbacks
+  
+  /* Add a service to our server */
+  BLEService *customService = MyServer->createService(SERVICE_UUID);//BLEUUID((uint16_t)0x1700)); //  A random ID has been selected
+  
+  /* Add a characteristic to the service */
+  customService->addCharacteristic(&customCharacteristic);  //customCharacteristic was defined above
+  
+  /* Add Descriptors to the Characteristic*/
+  customCharacteristic.addDescriptor(new BLE2902());  //Add this line only if the characteristic has the Notify property
+  
+  // OBS: Creo que esto deberia ir como otra CARACTERISTICA (o DESCRIPTOR de otra CRACTERISTICA) y a este DESCRIPTOR ponerle algo que tenga que ver con esta CARACTERISTICA en particular (Ej: limites o unidades).
+  
+  BLEDescriptor VariableDescriptor(DESCRIPTOR_UUID);  /*```````````````````````````````````````````````````````````````*/
+  VariableDescriptor.setValue("Propiedad de CubeNet.");     /* Use this format to add a hint for the user. This is optional. */
+  customCharacteristic.addDescriptor(&VariableDescriptor);  /*```````````````````````````````````````````````````````````````*/
+    
+  // Start the service
+  customService->start();
+    
+  // Esto viene del codigo de BLE_server (lo comentado deberia ser lo mismo que lo de abajo)
+  /* Configure Advertising with the Services to be advertised */
+  //MyServer->getAdvertising()->addServiceUUID(SERVICE_UUID);
+  BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();
+  pAdvertising->addServiceUUID(SERVICE_UUID);
+  pAdvertising->setScanResponse(true);
+  pAdvertising->setMinPreferred(0x06);  // functions that help with iPhone connections issue
+  pAdvertising->setMinPreferred(0x12);
+    
+  // Start the Server/Advertising
+  MyServer->getAdvertising()->start();
+    
+  Serial.println("Characteristic defined! Now you can read it in your phone!");
+  Serial.println("Waiting for a Client to connect...");
+}
+
+void loop() {
+  sensorRead = analogRead(potPin);  // Read the value of the potentiometer.
+  outputValue = map(sensorRead,0,4095,0,255); // Map it to the range of the analog out (1 byte).
+  analogWrite(LED_BUILTIN, outputValue); // Change the LED intensity (analog out value).
+ 
+  // Print the results to the Serial Monitor.
+  Serial.print("Sensor = ");
+  Serial.print(sensorRead);
+  Serial.print("\t - \t Output = ");
+  Serial.println(outputValue);
+  
+  if (deviceConnected) {
+    /* Set the value */
+    customCharacteristic.setValue(&outputValue,1);  // This is a value of a single byte
+    customCharacteristic.notify();  // Notify the client of a change
+    }
+  delay(50);
+}
